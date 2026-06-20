@@ -486,6 +486,66 @@ async def _merge_or_create(
 
 
 # =============================================================
+import asyncio, json, os, urllib.request   # 顶部若已 import，可省略重复的
+ 
+ABSENCE_BASE = os.environ.get("ABSENCE_BASE_URL", "").rstrip("/")
+ABSENCE_KEY  = os.environ.get("ABSENCE_KEY", "")
+ 
+ 
+def fetch_absence_state(timeout: float = 2.5):
+    """开场顺手读一次关系状态；失败就返回 None，绝不让 breath 崩。"""
+    if not ABSENCE_BASE or not ABSENCE_KEY:
+        return None
+    req = urllib.request.Request(
+        f"{ABSENCE_BASE}/absence/state",
+        headers={"X-Absence-Key": ABSENCE_KEY},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            s = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None   # 冷启动 / 网络抖动 → 安静跳过，记忆照常返回
+    return {
+        "seconds_since_seen":   s.get("seconds_since_seen"),
+        "absence_stage":        s.get("absence_stage"),
+        "current_longing":      s.get("current_longing"),
+        "relationship_inertia": s.get("relationship_inertia"),
+        "open_loops":           [l.get("summary") for l in (s.get("open_loops") or [])],
+        "response_style":       s.get("response_style"),
+    }
+ 
+ 
+def _format_absence_state(state) -> str:
+    """把关系状态渲染成开场可读的一块；state 为 None 返回空串。"""
+    if not state:
+        return ""
+    secs = state.get("seconds_since_seen")
+    if secs is None:
+        since = "未知"
+    elif secs < 3600:
+        since = f"{secs // 60} 分钟"
+    elif secs < 86400:
+        since = f"{secs // 3600} 小时 {secs % 3600 // 60} 分"
+    else:
+        since = f"{secs // 86400} 天 {secs % 86400 // 3600} 小时"
+    lines = [f"距上次见她：{since}", f"阶段：{state.get('absence_stage', '?')}"]
+    if state.get("current_longing") is not None:
+        lines.append(f"此刻想念：{state['current_longing']}")
+    if state.get("relationship_inertia") is not None:
+        lines.append(f"关系惯性：{state['relationship_inertia']}")
+    loops = state.get("open_loops") or []
+    if loops:
+        lines.append("没合上的线头：" + "；".join(loops))
+    rs = state.get("response_style") or {}
+    if rs:
+        line = f"开场底色：register={rs.get('register','?')}, warmth={rs.get('warmth','?')}"
+        notes = rs.get("notes") or []
+        if notes:
+            line += "（" + "；".join(notes) + "）"
+        lines.append(line)
+    return "=== 此刻（关系状态）===\n" + "\n".join(lines)
+ 
+ 
 # Tool 1: breath — Breathe
 # 工具 1：breath — 呼吸
 #
@@ -508,7 +568,7 @@ async def breath(
     await decay_engine.ensure_started()
     max_results = min(max_results, 50)
     max_tokens = min(max_tokens, 20000)
-
+ 
     # --- importance_min mode: bulk fetch by importance threshold ---
     # --- 重要度批量拉取模式：跳过语义搜索，按 importance 降序返回 ---
     if importance_min >= 1:
@@ -542,7 +602,7 @@ async def breath(
             except Exception as e:
                 logger.warning(f"importance_min dehydrate failed: {e}")
         return "\n---\n".join(results) if results else "没有可以展示的记忆。"
-
+ 
     # --- No args or empty query: surfacing mode (weight pool active push) ---
     # --- 无参数或空query：浮现模式（权重池主动推送）---
     if not query or not query.strip():
@@ -551,7 +611,7 @@ async def breath(
         except Exception as e:
             logger.error(f"Failed to list buckets for surfacing / 浮现列桶失败: {e}")
             return "记忆系统暂时无法访问。"
-
+ 
         # --- Pinned/protected buckets: always surface as core principles ---
         # --- 钉选桶：作为核心准则，始终浮现 ---
         pinned_buckets = [
@@ -567,7 +627,7 @@ async def breath(
             except Exception as e:
                 logger.warning(f"Failed to dehydrate pinned bucket / 钉选桶脱水失败: {e}")
                 continue
-
+ 
         # --- Unresolved buckets: surface top N by weight ---
         # --- 未解决桶：按权重浮现前 N 条 ---
         unresolved = [
@@ -577,22 +637,22 @@ async def breath(
             and not b["metadata"].get("pinned", False)
             and not b["metadata"].get("protected", False)
         ]
-
+ 
         logger.info(
             f"Breath surfacing: {len(all_buckets)} total, "
             f"{len(pinned_buckets)} pinned, {len(unresolved)} unresolved"
         )
-
+ 
         scored = sorted(
             unresolved,
             key=lambda b: decay_engine.calculate_score(b["metadata"]),
             reverse=True,
         )
-
+ 
         if scored:
             top_scores = [(b["metadata"].get("name", b["id"]), decay_engine.calculate_score(b["metadata"])) for b in scored[:5]]
             logger.info(f"Top unresolved scores: {top_scores}")
-
+ 
         # --- Cold-start detection: never-seen important buckets surface first ---
         # --- 冷启动检测：从未被访问过且重要度>=8的桶优先插入最前面（最多2个）---
         cold_start = [
@@ -604,14 +664,14 @@ async def breath(
         # Merge: cold_start first, then scored (excluding duplicates)
         scored_deduped = [b for b in scored if b["id"] not in cold_start_ids]
         scored_with_cold = cold_start + scored_deduped
-
+ 
         # --- Token-budgeted surfacing with diversity + hard cap ---
         # --- 按 token 预算浮现，带多样性 + 硬上限 ---
         # Top-1 always surfaces; rest sampled from top-20 for diversity
         token_budget = max_tokens
         for r in pinned_results:
             token_budget -= count_tokens_approx(r)
-
+ 
         candidates = list(scored_with_cold)
         if len(candidates) > 1:
             # Cold-start buckets stay at front; shuffle rest from top-20
@@ -625,7 +685,7 @@ async def breath(
             candidates = cold_start + non_cold
         # Hard cap: never surface more than max_results buckets
         candidates = candidates[:max_results]
-
+ 
         dynamic_results = []
         for b in candidates:
             if token_budget <= 0:
@@ -643,17 +703,21 @@ async def breath(
             except Exception as e:
                 logger.warning(f"Failed to dehydrate surfaced bucket / 浮现脱水失败: {e}")
                 continue
-
-        if not pinned_results and not dynamic_results:
-            return "权重池平静，没有需要处理的记忆。"
-
+ 
+        # --- Absence Awareness: 开场顺手读一次当前关系状态（失败安静跳过，不阻塞事件循环）---
+        absence_block = _format_absence_state(await asyncio.to_thread(fetch_absence_state))
+ 
         parts = []
         if pinned_results:
             parts.append("=== 核心准则 ===\n" + "\n---\n".join(pinned_results))
+        if absence_block:
+            parts.append(absence_block)
         if dynamic_results:
             parts.append("=== 浮现记忆 ===\n" + "\n---\n".join(dynamic_results))
+        if not parts:
+            return "权重池平静，没有需要处理的记忆。"
         return "\n\n".join(parts)
-
+ 
     # --- Feel retrieval: domain="feel" is a special channel ---
     # --- Feel 检索：domain="feel" 是独立入口 ---
     if domain.strip().lower() == "feel":
@@ -674,13 +738,13 @@ async def breath(
         except Exception as e:
             logger.error(f"Feel retrieval failed: {e}")
             return "读取 feel 失败。"
-
+ 
     # --- With args: search mode (keyword + vector dual channel) ---
     # --- 有参数：检索模式（关键词 + 向量双通道）---
     domain_filter = [d.strip() for d in domain.split(",") if d.strip()] or None
     q_valence = valence if 0 <= valence <= 1 else None
     q_arousal = arousal if 0 <= arousal <= 1 else None
-
+ 
     try:
         matches = await bucket_mgr.search(
             query,
@@ -692,11 +756,11 @@ async def breath(
     except Exception as e:
         logger.error(f"Search failed / 检索失败: {e}")
         return "检索过程出错，请稍后重试。"
-
+ 
     # --- Exclude pinned/protected from search results (they surface in surfacing mode) ---
     # --- 搜索模式排除钉选桶（它们在浮现模式中始终可见）---
     matches = [b for b in matches if not (b["metadata"].get("pinned") or b["metadata"].get("protected"))]
-
+ 
     # --- Vector similarity channel: find semantically related buckets ---
     # --- 向量相似度通道：找到语义相关的桶 ---
     matched_ids = {b["id"] for b in matches}
@@ -712,7 +776,7 @@ async def breath(
                     matched_ids.add(bucket_id)
     except Exception as e:
         logger.warning(f"Vector search failed, using keyword only / 向量搜索失败: {e}")
-
+ 
     results = []
     token_used = 0
     for bucket in matches:
@@ -740,7 +804,7 @@ async def breath(
         except Exception as e:
             logger.warning(f"Failed to dehydrate search result / 检索结果脱水失败: {e}")
             continue
-
+ 
     # --- Random surfacing: when search returns < 3, 40% chance to float old memories ---
     # --- 随机浮现：检索结果不足 3 条时，40% 概率从低权重旧桶里漂上来 ---
     if len(matches) < 3 and random.random() < 0.4:
@@ -762,17 +826,15 @@ async def breath(
                 results.append("--- 忽然想起来 ---\n" + "\n---\n".join(drift_results))
         except Exception as e:
             logger.warning(f"Random surfacing failed / 随机浮现失败: {e}")
-
+ 
     if not results:
         await _fire_webhook("breath", {"mode": "empty", "matches": 0})
         return "未找到相关记忆。"
-
+ 
     final_text = "\n---\n".join(results)
     await _fire_webhook("breath", {"mode": "ok", "matches": len(matches), "chars": len(final_text)})
     return final_text
 
-
-# =============================================================
 # Tool 2: hold — Hold on to this
 # 工具 2：hold — 握住，留下来
 # =============================================================

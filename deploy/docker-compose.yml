@@ -1,13 +1,14 @@
-# ============================================================
-# Ombre Brain Docker Compose
-# Docker Compose 配置
+﻿# Ombre Brain — 开发 / VPS 部署
+# 从本地源码构建镜像，适合 VPS 直接 rsync + compose up
 #
-# Usage / 使用：
-#   1. Create .env: echo "OMBRE_COMPRESS_API_KEY=your-key" > .env
-#      创建 .env 文件
-#   2. docker-compose up -d
-#   3. docker compose logs tunnel (for public URL / 查看公网地址)
-# ============================================================
+# 用法：
+#   cd /opt/ombre-brain
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#
+# 敏感 key 通过环境变量传入（不要写进此文件）：
+#   export OMBRE_COMPRESS_API_KEY=...
+#   export OMBRE_EMBED_API_KEY=...
+#   export OMBRE_DASHBOARD_PASSWORD=...
 
 services:
   ombre-brain:
@@ -17,77 +18,17 @@ services:
     container_name: ombre-brain
     restart: unless-stopped
     ports:
-      - "18001:8000"                        # Local debug port (optional) / 本地调试端口
-    env_file:
-      - .env                                # Load all OMBRE_* vars from deploy/.env
+      - "8000:8000"
     environment:
-      # These are container-fixed; cannot be overridden via .env.
-      # 容器内固定值，不允许 .env 覆盖。
-      - OMBRE_TRANSPORT=streamable-http     # Container must use HTTP transport / 容器必须用 HTTP 模式
-      - OMBRE_BUCKETS_DIR=/data             # Container-internal bucket path / 容器内路径
-      - OMBRE_EMBED_BACKEND=api             # Embedding 使用 API 后端
-      # 以下变量从 .env 文件加载（通过上方 env_file 指令），此处列出仅供参考：
-      # --- 压缩 LLM（必填）---
-      # - OMBRE_COMPRESS_API_KEY=           # 必填：任意 OpenAI 兼容 key（DeepSeek / Gemini…）
-      # - OMBRE_COMPRESS_BASE_URL=          # 可选：自定义 endpoint
-      # - OMBRE_COMPRESS_MODEL=             # 可选：默认 gemini-2.5-flash-lite
-      # --- 向量化（可选，缺则语义检索关闭）---
-      # - OMBRE_EMBED_API_KEY=              # 必填：Gemini API key
-      # - OMBRE_EMBED_BASE_URL=             # 可选：自定义 endpoint，默认 Gemini
-      # - OMBRE_EMBED_MODEL=                # 可选：默认 gemini-embedding-001
-      # --- 其他 ---
-      # - OMBRE_DASHBOARD_PASSWORD=         # 可选：Dashboard 访问密码
+      - OMBRE_TRANSPORT=streamable-http
+      - OMBRE_EMBED_BACKEND=${OMBRE_EMBED_BACKEND:-api}
+      - OMBRE_COMPRESS_API_KEY=${OMBRE_COMPRESS_API_KEY}
+      - OMBRE_COMPRESS_BASE_URL=${OMBRE_COMPRESS_BASE_URL:-}
+      - OMBRE_COMPRESS_MODEL=${OMBRE_COMPRESS_MODEL:-}
+      - OMBRE_EMBED_API_KEY=${OMBRE_EMBED_API_KEY:-}
+      - OMBRE_EMBED_BASE_URL=${OMBRE_EMBED_BASE_URL:-}
+      - OMBRE_EMBED_MODEL=${OMBRE_EMBED_MODEL:-}
+      - OMBRE_DASHBOARD_PASSWORD=${OMBRE_DASHBOARD_PASSWORD}
     volumes:
-      # Mount your Obsidian vault (or any host directory) for persistent storage.
-      # Set OMBRE_HOST_VAULT_DIR in your .env (or in the Dashboard "Storage" panel)
-      # to point at the host folder you want mounted into the container at /data.
-      # 挂载你的 Obsidian 仓库（或任意宿主机目录）做持久化存储。
-      # 在 .env（或 Dashboard 的「存储」面板）中设置 OMBRE_HOST_VAULT_DIR
-      # 指向你希望挂载到容器 /data 的宿主机目录。
-      #
-      # Examples / 示例:
-      #   OMBRE_HOST_VAULT_DIR=/path/to/your/Obsidian Vault/Ombre Brain
-      #   OMBRE_HOST_VAULT_DIR=~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Obsidian Vault/Ombre Brain
-      - ${OMBRE_HOST_VAULT_DIR:-../buckets}:/data
-      - ../config.yaml:/app/config.yaml
-    # 本地向量模型（可选）：取消注释 ollama 服务后，OB 默认按容器名
-    # http://ombre-ollama:11434 连接（同一 compose 网络，无需额外配置）。
-    # 也可用环境变量 OMBRE_OLLAMA_URL 覆盖。
-
-  # Local embedding model (optional) / 本地向量模型（可选）
-  # 启用本地 bge-m3：docker compose up -d ollama，然后在 Dashboard 设置页
-  # 「本地向量模型」面板点「下载 bge-m3」+「切换到本地并重算」。
-  ollama:
-    image: ollama/ollama:latest        # arm64 / amd64 均支持
-    container_name: ombre-ollama
-    restart: unless-stopped
-    volumes:
-      - ../ollama:/root/.ollama          # 持久化模型权重（宿主机 ./ollama），避免重启重下
-    # 不需要对外暴露端口；OB 通过内网容器名访问。如需本机直连可加：
-    # ports:
-    #   - "11434:11434"
-
-  # Cloudflare Tunnel (optional) — expose to public internet
-  # Cloudflare Tunnel（可选）— 暴露到公网
-  # Configure your own credentials under ~/.cloudflared/
-  # 在 ~/.cloudflared/ 下放你自己的凭证
-  tunnel:
-    image: cloudflare/cloudflared:latest
-    container_name: ombre-tunnel
-    restart: unless-stopped
-    command: >
-      tunnel --no-autoupdate --protocol http2
-      --config /etc/cloudflared/config.yml
-      --proxy-keepalive-timeout 300s
-      --proxy-connection-timeout 300s
-      run
-    environment:
-      # Bypass system proxy for internal Docker hostnames so cloudflared
-      # connects to ombre-brain directly instead of routing through the
-      # host system proxy (e.g. Clash / any local proxy on the host).
-      - NO_PROXY=ombre-brain,localhost,127.0.0.1
-      - no_proxy=ombre-brain,localhost,127.0.0.1
-    volumes:
-      - ~/.cloudflared:/etc/cloudflared
-    depends_on:
-      - ombre-brain
+      - /opt/ombre-brain/buckets:/app/buckets
+      - /opt/ombre-brain/config.yaml:/app/config.yaml

@@ -1,12 +1,14 @@
-# ============================================================
-# Ombre Brain — 用户快速部署版
-# User Quick Deploy (pre-built image, no local build needed)
+﻿# Ombre Brain — 用户自部署
+# 直接拉取 Docker Hub 镜像，不需要源码
 #
-# 使用方法 / Usage:
-#   1. 创建 .env: echo "OMBRE_COMPRESS_API_KEY=your-key" > .env
-#   2. 按需修改下面的 volumes 路径
-#   3. docker compose -f docker-compose.user.yml up -d
-# ============================================================
+# 用法：
+#   docker compose -f docker-compose.user.yml up -d
+#
+# 需要准备：
+#   1. 把 config.yaml 放在与此文件相同目录（参考 config.example.yaml）
+#   2. 设置以下环境变量（或在此文件 environment: 段填写）：
+#      OMBRE_COMPRESS_API_KEY  — 压缩/脱水用的 LLM key
+#      OMBRE_DASHBOARD_PASSWORD — Dashboard 登录密码
 
 services:
   ombre-brain:
@@ -17,53 +19,14 @@ services:
       - "8000:8000"
     environment:
       - OMBRE_TRANSPORT=streamable-http
-      - OMBRE_BUCKETS_DIR=/data
-      - OMBRE_EMBED_BACKEND=api
-      # --- 压缩 LLM（必填）---
+      - OMBRE_EMBED_BACKEND=${OMBRE_EMBED_BACKEND:-local}
       - OMBRE_COMPRESS_API_KEY=${OMBRE_COMPRESS_API_KEY}
       - OMBRE_COMPRESS_BASE_URL=${OMBRE_COMPRESS_BASE_URL:-}
       - OMBRE_COMPRESS_MODEL=${OMBRE_COMPRESS_MODEL:-}
-      # --- 向量化（可选，缺则语义检索关闭）---
       - OMBRE_EMBED_API_KEY=${OMBRE_EMBED_API_KEY:-}
       - OMBRE_EMBED_BASE_URL=${OMBRE_EMBED_BASE_URL:-}
       - OMBRE_EMBED_MODEL=${OMBRE_EMBED_MODEL:-}
-      # --- 其他 ---
-      - OMBRE_DASHBOARD_PASSWORD=${OMBRE_DASHBOARD_PASSWORD:-}
+      - OMBRE_DASHBOARD_PASSWORD=${OMBRE_DASHBOARD_PASSWORD}
     volumes:
-      # 数据目录：改成你的 Obsidian Vault 路径，或任意本地绝对路径。
-      # 用 ${OMBRE_HOST_VAULT_DIR} 在 .env 里统一管理；未设置则回退到当前目录下的 ./buckets。
-      - ${OMBRE_HOST_VAULT_DIR:-./buckets}:/data
-      # (Optional) Mount custom config to override model / API settings:
-      # - ./config.yaml:/app/config.yaml
-    # 本地向量模型（可选）：取消注释 ollama 服务后，OB 默认按容器名
-    # http://ombre-ollama:11434 连接。也可用 OMBRE_OLLAMA_URL 环境变量覆盖。
-
-  # ── 可选：本地向量模型 ───────────────────────────────────────────
-  # 取消注释以启用 bge-m3 本地推理（无需 embedding API key）。
-  # 启动后在 Dashboard 设置页点「下载 bge-m3」+「切换到本地并重算」。
-  # ollama:
-  #   image: ollama/ollama:latest
-  #   container_name: ombre-ollama
-  #   restart: unless-stopped
-  #   volumes:
-  #     - ./ollama:/root/.ollama
-
-  # ── 可选：Cloudflare Tunnel 公网暴露 ────────────────────────────
-  # 取消注释后在 ~/.cloudflared/ 下放凭证，再 docker compose up -d tunnel。
-  # tunnel:
-  #   image: cloudflare/cloudflared:latest
-  #   container_name: ombre-tunnel
-  #   restart: unless-stopped
-  #   command: >
-  #     tunnel --no-autoupdate --protocol http2
-  #     --config /etc/cloudflared/config.yml
-  #     --proxy-keepalive-timeout 300s
-  #     --proxy-connection-timeout 300s
-  #     run
-  #   environment:
-  #     - NO_PROXY=ombre-brain,localhost,127.0.0.1
-  #     - no_proxy=ombre-brain,localhost,127.0.0.1
-  #   volumes:
-  #     - ~/.cloudflared:/etc/cloudflared
-  #   depends_on:
-  #     - ombre-brain
+      - ./buckets:/app/buckets
+      - ./config.yaml:/app/config.yaml

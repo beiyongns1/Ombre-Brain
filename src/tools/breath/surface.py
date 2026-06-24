@@ -285,7 +285,7 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
         except Exception as e:
             rt.logger.warning(f"Dream surface block failed / 偶遇模块异常: {e}")
 
-            parts = []
+    parts = []
 
     if pinned_results:
         parts.append("=== 核心准则 ===\n" + "\n---\n".join(pinned_results))

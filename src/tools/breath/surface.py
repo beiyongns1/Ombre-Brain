@@ -285,20 +285,25 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
         except Exception as e:
             rt.logger.warning(f"Dream surface block failed / 偶遇模块异常: {e}")
 
-        parts = []
-        if pinned_results:
-            parts.append("=== 核心准则 ===\n" + "\n---\n".join(pinned_results))
+            parts = []
+
+    if pinned_results:
+        parts.append("=== 核心准则 ===\n" + "\n---\n".join(pinned_results))
+
     try:
         absence_block = format_absence_state(fetch_absence_state())
         if absence_block:
             parts.append(absence_block)
     except Exception as e:
-        rt.logger.warning(f"Absence Awareness failed / 缺席感知模块异常：{e}")
+        rt.logger.warning(f"Absence Awareness failed / 缺席感知模块异常: {e}")
 
-        if dynamic_results:
-            parts.append("=== 浮现记忆 ===\n" + "\n---\n".join(dynamic_results))
-        if passive_results:
-            parts.append("=== 久未浮现 ===\n" + "\n---\n".join(passive_results))
-        if dream_results:
-            parts.append("=== 偶然想起 ===\n" + "\n---\n".join(dream_results))
-        return "\n\n".join(parts)
+    if dynamic_results:
+        parts.append("=== 浮现记忆 ===\n" + "\n---\n".join(dynamic_results))
+
+    if passive_results:
+        parts.append("=== 久未浮现 ===\n" + "\n---\n".join(passive_results))
+
+    if dream_results:
+        parts.append("=== 偶然想起 ===\n" + "\n---\n".join(dream_results))
+
+    return "\n\n".join(parts)
